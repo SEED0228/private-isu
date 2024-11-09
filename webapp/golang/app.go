@@ -66,6 +66,11 @@ type Comment struct {
 	User      User
 }
 
+type CommentCount struct {
+	PostID int `db:"post_id"`
+	Count  int `db:"count"`
+}
+
 func init() {
 	memdAddr := os.Getenv("ISUCONP_MEMCACHED_ADDRESS")
 	if memdAddr == "" {
@@ -180,14 +185,17 @@ func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, erro
 	}
 
 	// 2. 各投稿のコメント数をバッチで取得
-	commentCounts := make(map[int]int)
+	var commentCountResults []CommentCount
 	query := "SELECT post_id, COUNT(*) AS count FROM comments WHERE post_id IN (?) GROUP BY post_id"
 	query, args, _ := sqlx.In(query, postIDs)
-	err := db.Select(&commentCounts, query, args...)
+	err := db.Select(&commentCountResults, query, args...)
 	if err != nil {
 		return nil, err
 	}
-	print(commentCounts)
+	commentCounts := make(map[int]int)
+	for _, cc := range commentCountResults {
+		commentCounts[cc.PostID] = cc.Count
+	}
 
 	// 3. 各投稿の最新コメントを一度に取得
 	commentsMap := make(map[int][]Comment)
