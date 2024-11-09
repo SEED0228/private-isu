@@ -526,98 +526,98 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// posts, err := makePosts(results, getCSRFToken(r), false)
-	// if err != nil {
-	// log.Print(err)
-	// return
-	// }
+	posts, err := makePosts(results, getCSRFToken(r), false)
+	if err != nil {
+		log.Print(err)
+		return
+	}
 
 	// 怒りファクタ
-	var posts []Post
-	postIDs := make([]int, len(results))
-	allComments := false
-	csrfToken := getCSRFToken(r)
-	for i, p := range results {
-		postIDs[i] = p.ID
-	}
+	// var posts []Post
+	// postIDs := make([]int, len(results))
+	// allComments := false
+	// csrfToken := getCSRFToken(r)
+	// for i, p := range results {
+	// 	postIDs[i] = p.ID
+	// }
 
-	commentCounts := make(map[int]int)
-	query := "SELECT post_id, COUNT(*) AS count FROM comments WHERE post_id IN (?) GROUP BY post_id"
-	query, args, _ := sqlx.In(query, postIDs)
-	err = db.Select(&commentCounts, query, args...)
-	if err != nil {
-		log.Print(err)
-		return
-	}
+	// commentCounts := make(map[int]int)
+	// query := "SELECT post_id, COUNT(*) AS count FROM comments WHERE post_id IN (?) GROUP BY post_id"
+	// query, args, _ := sqlx.In(query, postIDs)
+	// err = db.Select(&commentCounts, query, args...)
+	// if err != nil {
+	// 	log.Print(err)
+	// 	return
+	// }
 
-	commentsMap := make(map[int][]Comment)
-	query = "SELECT * FROM comments WHERE post_id IN (?) ORDER BY created_at DESC"
-	if !allComments {
-		query += " LIMIT 3"
-	}
-	query, args, _ = sqlx.In(query, postIDs)
-	comments := []Comment{}
-	err = db.Select(&comments, query, args...)
-	if err != nil {
-		log.Print(err)
-		return
-	}
+	// commentsMap := make(map[int][]Comment)
+	// query = "SELECT * FROM comments WHERE post_id IN (?) ORDER BY created_at DESC"
+	// if !allComments {
+	// 	query += " LIMIT 3"
+	// }
+	// query, args, _ = sqlx.In(query, postIDs)
+	// comments := []Comment{}
+	// err = db.Select(&comments, query, args...)
+	// if err != nil {
+	// 	log.Print(err)
+	// 	return
+	// }
 
-	for _, comment := range comments {
-		commentsMap[comment.PostID] = append(commentsMap[comment.PostID], comment)
-	}
+	// for _, comment := range comments {
+	// 	commentsMap[comment.PostID] = append(commentsMap[comment.PostID], comment)
+	// }
 
-	userIDs := make(map[int]struct{})
-	for _, p := range results {
-		userIDs[p.UserID] = struct{}{}
-		for _, comment := range commentsMap[p.ID] {
-			userIDs[comment.UserID] = struct{}{}
-		}
-	}
+	// userIDs := make(map[int]struct{})
+	// for _, p := range results {
+	// 	userIDs[p.UserID] = struct{}{}
+	// 	for _, comment := range commentsMap[p.ID] {
+	// 		userIDs[comment.UserID] = struct{}{}
+	// 	}
+	// }
 
-	userMap := make(map[int]User)
-	userIDsList := []int{}
-	for userID := range userIDs {
-		userIDsList = append(userIDsList, userID)
-	}
+	// userMap := make(map[int]User)
+	// userIDsList := []int{}
+	// for userID := range userIDs {
+	// 	userIDsList = append(userIDsList, userID)
+	// }
 
-	query = "SELECT * FROM users WHERE id IN (?)"
-	query, args, _ = sqlx.In(query, userIDsList)
-	users := []User{}
-	err = db.Select(&users, query, args...)
-	if err != nil {
-		log.Print(err)
-		return
-	}
-	for _, user := range users {
-		userMap[user.ID] = user
-	}
+	// query = "SELECT * FROM users WHERE id IN (?)"
+	// query, args, _ = sqlx.In(query, userIDsList)
+	// users := []User{}
+	// err = db.Select(&users, query, args...)
+	// if err != nil {
+	// 	log.Print(err)
+	// 	return
+	// }
+	// for _, user := range users {
+	// 	userMap[user.ID] = user
+	// }
 
-	for _, p := range results {
-		// コメント数を設定
-		p.CommentCount = commentCounts[p.ID]
+	// for _, p := range results {
+	// 	// コメント数を設定
+	// 	p.CommentCount = commentCounts[p.ID]
 
-		// コメントを取得して逆順に
-		comments := commentsMap[p.ID]
-		for i, j := 0, len(comments)-1; i < j; i, j = i+1, j-1 {
-			comments[i], comments[j] = comments[j], comments[i]
-		}
-		for i := range comments {
-			comments[i].User = userMap[comments[i].UserID]
-		}
-		p.Comments = comments
+	// 	// コメントを取得して逆順に
+	// 	comments := commentsMap[p.ID]
+	// 	for i, j := 0, len(comments)-1; i < j; i, j = i+1, j-1 {
+	// 		comments[i], comments[j] = comments[j], comments[i]
+	// 	}
+	// 	for i := range comments {
+	// 		comments[i].User = userMap[comments[i].UserID]
+	// 	}
+	// 	p.Comments = comments
 
-		// 投稿のユーザー情報を設定
-		p.User = userMap[p.UserID]
+	// 	// 投稿のユーザー情報を設定
+	// 	p.User = userMap[p.UserID]
 
-		// CSRF トークンを設定
-		p.CSRFToken = csrfToken
+	// 	// CSRF トークンを設定
+	// 	p.CSRFToken = csrfToken
 
-		// 削除されていない投稿のみ追加
-		if p.User.DelFlg == 0 {
-			posts = append(posts, p)
-		}
-	}
+	// 	// 削除されていない投稿のみ追加
+	// 	if p.User.DelFlg == 0 {
+	// 		posts = append(posts, p)
+	// 	}
+	// }
 	// リファクタここまで
 
 	if len(posts) == 0 {
