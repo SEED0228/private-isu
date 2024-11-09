@@ -173,11 +173,13 @@ func getFlash(w http.ResponseWriter, r *http.Request, key string) string {
 
 func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, error) {
 	var posts []Post
+	// 1. 各投稿の post_id を一度に取得
 	postIDs := make([]int, len(results))
 	for i, p := range results {
 		postIDs[i] = p.ID
 	}
 
+	// 2. 各投稿のコメント数をバッチで取得
 	commentCounts := make(map[int]int)
 	query := "SELECT post_id, COUNT(*) AS count FROM comments WHERE post_id IN (?) GROUP BY post_id"
 	query, args, _ := sqlx.In(query, postIDs)
@@ -185,7 +187,9 @@ func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, erro
 	if err != nil {
 		return nil, err
 	}
+	print(commentCounts)
 
+	// 3. 各投稿の最新コメントを一度に取得
 	commentsMap := make(map[int][]Comment)
 	query = "SELECT * FROM comments WHERE post_id IN (?) ORDER BY created_at DESC"
 	if !allComments {
@@ -198,10 +202,12 @@ func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, erro
 		return nil, err
 	}
 
+	// コメントを post_id ごとにマッピング
 	for _, comment := range comments {
 		commentsMap[comment.PostID] = append(commentsMap[comment.PostID], comment)
 	}
 
+	// 4. ユーザー情報をバッチで取得
 	userIDs := make(map[int]struct{})
 	for _, p := range results {
 		userIDs[p.UserID] = struct{}{}
@@ -223,10 +229,13 @@ func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, erro
 	if err != nil {
 		return nil, err
 	}
+
+	// ユーザー情報を ID によってマッピング
 	for _, user := range users {
 		userMap[user.ID] = user
 	}
 
+	// 5. 各投稿にデータをセット
 	for _, p := range results {
 		// コメント数を設定
 		p.CommentCount = commentCounts[p.ID]
@@ -252,7 +261,6 @@ func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, erro
 			posts = append(posts, p)
 		}
 	}
-
 	return posts, nil
 }
 
