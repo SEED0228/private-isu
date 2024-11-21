@@ -66,6 +66,11 @@ type Comment struct {
 	User      User
 }
 
+type CommentCount struct {
+	PostID int `db:"post_id"`
+	Count  int `db:"count"`
+}
+
 func init() {
 	memdAddr := os.Getenv("ISUCONP_MEMCACHED_ADDRESS")
 	if memdAddr == "" {
@@ -173,52 +178,97 @@ func getFlash(w http.ResponseWriter, r *http.Request, key string) string {
 
 func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, error) {
 	var posts []Post
+	// 1. 各投稿の post_id を一度に取得
+	postIDs := make([]int, len(results))
+	for i, p := range results {
+		postIDs[i] = p.ID
+	}
 
+	// 2. 各投稿のコメント数をバッチで取得
+	var commentCountResults []CommentCount
+	query := "SELECT post_id, COUNT(*) AS count FROM comments WHERE post_id IN (?) GROUP BY post_id"
+	query, args, _ := sqlx.In(query, postIDs)
+	err := db.Select(&commentCountResults, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	commentCounts := make(map[int]int)
+	for _, cc := range commentCountResults {
+		commentCounts[cc.PostID] = cc.Count
+	}
+
+	// 3. 各投稿の最新コメントを一度に取得
+	commentsMap := make(map[int][]Comment)
+	query = "SELECT * FROM comments WHERE post_id IN (?) ORDER BY created_at DESC"
+	if !allComments {
+		query += " LIMIT 3"
+	}
+	query, args, _ = sqlx.In(query, postIDs)
+	comments := []Comment{}
+	err = db.Select(&comments, query, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	// コメントを post_id ごとにマッピング
+	for _, comment := range comments {
+		commentsMap[comment.PostID] = append(commentsMap[comment.PostID], comment)
+	}
+
+	// 4. ユーザー情報をバッチで取得
+	userIDs := make(map[int]struct{})
 	for _, p := range results {
-		err := db.Get(&p.CommentCount, "SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?", p.ID)
-		if err != nil {
-			return nil, err
-		}
-
-		query := "SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC"
-		if !allComments {
-			query += " LIMIT 3"
-		}
-		var comments []Comment
-		err = db.Select(&comments, query, p.ID)
-		if err != nil {
-			return nil, err
-		}
-
-		for i := 0; i < len(comments); i++ {
-			err := db.Get(&comments[i].User, "SELECT * FROM `users` WHERE `id` = ?", comments[i].UserID)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		// reverse
-		for i, j := 0, len(comments)-1; i < j; i, j = i+1, j-1 {
-			comments[i], comments[j] = comments[j], comments[i]
-		}
-
-		p.Comments = comments
-
-		err = db.Get(&p.User, "SELECT * FROM `users` WHERE `id` = ?", p.UserID)
-		if err != nil {
-			return nil, err
-		}
-
-		p.CSRFToken = csrfToken
-
-		if p.User.DelFlg == 0 {
-			posts = append(posts, p)
-		}
-		if len(posts) >= postsPerPage {
-			break
+		userIDs[p.UserID] = struct{}{}
+		for _, comment := range commentsMap[p.ID] {
+			userIDs[comment.UserID] = struct{}{}
 		}
 	}
 
+	userMap := make(map[int]User)
+	userIDsList := []int{}
+	for userID := range userIDs {
+		userIDsList = append(userIDsList, userID)
+	}
+
+	query = "SELECT * FROM users WHERE id IN (?)"
+	query, args, _ = sqlx.In(query, userIDsList)
+	users := []User{}
+	err = db.Select(&users, query, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	// ユーザー情報を ID によってマッピング
+	for _, user := range users {
+		userMap[user.ID] = user
+	}
+
+	// 5. 各投稿にデータをセット
+	for _, p := range results {
+		// コメント数を設定
+		p.CommentCount = commentCounts[p.ID]
+
+		// コメントを取得して逆順に
+		comments := commentsMap[p.ID]
+		for i, j := 0, len(comments)-1; i < j; i, j = i+1, j-1 {
+			comments[i], comments[j] = comments[j], comments[i]
+		}
+		for i := range comments {
+			comments[i].User = userMap[comments[i].UserID]
+		}
+		p.Comments = comments
+
+		// 投稿のユーザー情報を設定
+		p.User = userMap[p.UserID]
+
+		// CSRF トークンを設定
+		p.CSRFToken = csrfToken
+
+		// 削除されていない投稿のみ追加
+		if p.User.DelFlg == 0 {
+			posts = append(posts, p)
+		}
+	}
 	return posts, nil
 }
 
@@ -386,7 +436,7 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 
 	results := []Post{}
 
-	err := db.Select(&results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` ORDER BY `created_at` DESC")
+	err := db.Select(&results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` ORDER BY `created_at` DESC LIMIT ?", strconv.Itoa(postsPerPage))
 	if err != nil {
 		log.Print(err)
 		return
@@ -416,7 +466,7 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func getAccountName(w http.ResponseWriter, r *http.Request) {
-	accountName := chi.URLParam(r, "accountName")
+	accountName := r.PathValue("accountName")
 	user := User{}
 
 	err := db.Get(&user, "SELECT * FROM `users` WHERE `account_name` = ? AND `del_flg` = 0", accountName)
@@ -432,7 +482,7 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 
 	results := []Post{}
 
-	err = db.Select(&results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `user_id` = ? ORDER BY `created_at` DESC", user.ID)
+	err = db.Select(&results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `user_id` = ? ORDER BY `created_at` DESC LIMIT ?", user.ID, strconv.Itoa(postsPerPage))
 	if err != nil {
 		log.Print(err)
 		return
@@ -520,7 +570,7 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	results := []Post{}
-	err = db.Select(&results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `created_at` <= ? ORDER BY `created_at` DESC", t.Format(ISO8601Format))
+	err = db.Select(&results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `created_at` <= ? ORDER BY `created_at` DESC LIMIT ?", t.Format(ISO8601Format), strconv.Itoa(postsPerPage))
 	if err != nil {
 		log.Print(err)
 		return
@@ -548,7 +598,7 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 }
 
 func getPostsID(w http.ResponseWriter, r *http.Request) {
-	pidStr := chi.URLParam(r, "id")
+	pidStr := r.PathValue("id")
 	pid, err := strconv.Atoi(pidStr)
 	if err != nil {
 		w.WriteHeader(http.StatusNotFound)
@@ -556,7 +606,7 @@ func getPostsID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	results := []Post{}
-	err = db.Select(&results, "SELECT * FROM `posts` WHERE `id` = ?", pid)
+	err = db.Select(&results, "SELECT * FROM `posts` WHERE `id` = ? LIMIT ?", pid, strconv.Itoa(postsPerPage))
 	if err != nil {
 		log.Print(err)
 		return
@@ -671,7 +721,7 @@ func postIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func getImage(w http.ResponseWriter, r *http.Request) {
-	pidStr := chi.URLParam(r, "id")
+	pidStr := r.PathValue("id")
 	pid, err := strconv.Atoi(pidStr)
 	if err != nil {
 		w.WriteHeader(http.StatusNotFound)
@@ -685,7 +735,7 @@ func getImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ext := chi.URLParam(r, "ext")
+	ext := r.PathValue("ext")
 
 	if ext == "jpg" && post.Mime == "image/jpeg" ||
 		ext == "png" && post.Mime == "image/png" ||
